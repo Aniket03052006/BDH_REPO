@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger("bdh-server")
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +27,15 @@ logging.basicConfig(level=logging.INFO)
 # FastAPI App
 # ──────────────────────────────────────────
 app = FastAPI()
+
+# Allow CORS for split deployment (Frontend on Vercel, Backend on Render)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # In production, replace with your Vercel URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32

@@ -7,7 +7,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 let NEURON_COUNT = 16384; // default, will be updated from server config
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 // Use the same host/port if local, or just host if on Render/HF
-const host = window.location.port ? `${window.location.hostname}:${window.location.port}` : window.location.host;
+// To override the backend for split deployment (e.g. Vercel + Render):
+// Change the string below to your Render URL: e.g., 'your-app.onrender.com'
+const BACKEND_HOST = null;
+const host = BACKEND_HOST || (window.location.port ? `${window.location.hostname}:${window.location.port}` : window.location.host);
 const WS_URL = `${protocol}//${host}/ws`;
 
 // Monosemantic color gradient: black → blue → cyan → yellow → white

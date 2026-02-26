@@ -9,7 +9,7 @@ const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 // Use the same host/port if local, or just host if on Render/HF
 // To override the backend for split deployment (e.g. Vercel + Render):
 // Change the string below to your Render URL: e.g., 'your-app.onrender.com'
-const BACKEND_HOST = null;
+const BACKEND_HOST = 'bdh-repo.onrender.com';
 const host = BACKEND_HOST || (window.location.port ? `${window.location.hostname}:${window.location.port}` : window.location.host);
 const WS_URL = `${protocol}//${host}/ws`;
 

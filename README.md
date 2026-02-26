@@ -21,7 +21,7 @@
 
 ## Overview
 
-Neural Explorer is an interactive web application for visualizing and experimenting with the **BDH (Biologically-Derived Heuristic)** neural architecture — a novel approach to language modeling that replaces traditional dense MLP layers with **sparse, biologically-inspired activation patterns**. The system provides a live 3D globe visualization of neural firing, Hebbian memory tracking, neuron profiling, ablation studies, weight consolidation, and a side-by-side comparison mode against GPT-2 (Transformer).
+Neural Explorer is an interactive web application for visualizing and experimenting with the **BDH (Baby Dragon Hatchling / Biologically-Derived Heuristic)** neural architecture — a novel approach to language modeling that replaces traditional dense MLP layers with **sparse, biologically-inspired activation patterns**. The system provides a live 3D globe visualization of neural firing, Hebbian memory tracking, neuron profiling, ablation studies, weight consolidation, and a side-by-side comparison mode against GPT-2 (Transformer).
 
 > **Copyright © 2025 Pathway Technology, Inc.**
 

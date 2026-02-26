@@ -6,23 +6,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // ═══════════════════════════════════════════
 let NEURON_COUNT = 16384; // default, will be updated from server config
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-// MULTI-SERVER LOAD BALANCING (Free Tier Hack)
-// List all your Render/Railway/HF URLs here
-const BACKEND_HOSTS = [
-    'bdh-repo.onrender.com',
-    'bdh-repo-n9hl.onrender.com',
-    'bdh-repo-9ein.onrender.com',
-    'bdh-repo-yosc.onrender.com'
-];
-
-// Simple Round Robin: Pick a random one or stick to the first successful one
-function getBestHost() {
-    if (BACKEND_HOSTS.length === 0) return (window.location.port ? `${window.location.hostname}:${window.location.port}` : window.location.host);
-    // For now, pick a random one to distribute load
-    return BACKEND_HOSTS[Math.floor(Math.random() * BACKEND_HOSTS.length)];
-}
-
-const host = getBestHost();
+// Use the same host/port if local, or just host if on Render/HF
+const host = window.location.port ? `${window.location.hostname}:${window.location.port}` : window.location.host;
 const WS_URL = `${protocol}//${host}/ws`;
 
 // Monosemantic color gradient: black → blue → cyan → yellow → white
@@ -582,6 +567,12 @@ function connect() {
         const data = jsonParseSafe(event.data);
         if (!data) return;
 
+        // Forward to comparison modal if open
+        if (window._handleCmpMessage) window._handleCmpMessage(data);
+
+        // Skip comparison messages — don't pollute the main chat
+        if (data.model === 'transformer' || data.model === 'bdh') return;
+        if (data.type === 'log' && data.model) return;
         if (data.error) {
             console.error('Server error:', data.error);
             appendError(data.error);
@@ -1193,9 +1184,10 @@ document.getElementById('btn-consolidate').addEventListener('click', async () =>
         const json = await res.json();
         if (json.status === 'success') {
             statsEl.innerHTML = `✅ Active: ${(json.active_fraction * 100).toFixed(1)}% | ` +
-                `Tokens: ${json.accumulated_tokens} | ` +
-                `ΔEnc: ${json.weight_norm_change?.encoder?.toFixed(4) || '?'} | ` +
-                `ΔDec: ${json.weight_norm_change?.decoder?.toFixed(4) || '?'}`;
+                `Tokens: ${json.accumulated_tokens}<br>` +
+                `ΔE: ${json.weight_norm_change?.encoder?.toFixed(4) || '?'} | ` +
+                `ΔEv: ${json.weight_norm_change?.encoder_v?.toFixed(4) || '?'} | ` +
+                `ΔD: ${json.weight_norm_change?.decoder?.toFixed(4) || '?'}`;
         } else {
             statsEl.textContent = `⏭ ${json.reason || json.status}`;
         }
@@ -1391,3 +1383,293 @@ sideViewBtn.addEventListener('click', () => {
     camera.lookAt(0, 0, 0);
     controls.target.set(0, 0, 0);
 });
+
+// ═══════════════════════════════════════════
+// COMPARISON MODAL
+// ═══════════════════════════════════════════
+(function initComparisonModal() {
+    const modal = document.getElementById('comparison-modal');
+    const openBtn = document.getElementById('compare-btn');
+    const closeBtn = document.getElementById('cmp-close-btn');
+    const cmpInput = document.getElementById('cmp-input');
+    const cmpSendBtn = document.getElementById('cmp-send-btn');
+    if (!modal || !openBtn) return;
+
+    // Tab switching
+    document.querySelectorAll('.cmp-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.cmp-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.cmp-tab-content').forEach(c => c.classList.remove('active'));
+            tab.classList.add('active');
+            const target = document.getElementById(tab.dataset.cmpTab);
+            if (target) target.classList.add('active');
+        });
+    });
+
+    // --- Dual Globe Setup ---
+    const CMP_N = NEURON_COUNT; // same as main globe
+    const cmpBdhAct = new Float32Array(CMP_N);
+    const cmpTfAct = new Float32Array(CMP_N);
+    const cmpBdhTarget = new Float32Array(CMP_N);
+    const cmpTfTarget = new Float32Array(CMP_N);
+
+    // Color palettes
+    const BLUE_STOPS = [
+        { t: 0.00, color: new THREE.Color(0x0d1117) },
+        { t: 0.15, color: new THREE.Color(0x1a237e) },
+        { t: 0.35, color: new THREE.Color(0x0288d1) },
+        { t: 0.55, color: new THREE.Color(0x00bcd4) },
+        { t: 0.75, color: new THREE.Color(0xfdd835) },
+        { t: 1.00, color: new THREE.Color(0xffffff) }
+    ];
+    const RED_STOPS = [
+        { t: 0.00, color: new THREE.Color(0x0d1117) },
+        { t: 0.15, color: new THREE.Color(0x7f1d1d) },
+        { t: 0.35, color: new THREE.Color(0xdc2626) },
+        { t: 0.55, color: new THREE.Color(0xf87171) },
+        { t: 0.75, color: new THREE.Color(0xfbbf24) },
+        { t: 1.00, color: new THREE.Color(0xffffff) }
+    ];
+
+    function colorFromStops(v, stops) {
+        v = Math.max(0, Math.min(1, v));
+        for (let i = 1; i < stops.length; i++) {
+            if (v <= stops[i].t) {
+                const t = (v - stops[i - 1].t) / (stops[i].t - stops[i - 1].t);
+                return stops[i - 1].color.clone().lerp(stops[i].color, t);
+            }
+        }
+        return stops[stops.length - 1].color.clone();
+    }
+
+    function createCmpGlobe(containerEl) {
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x07070b);
+        const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+        cam.position.z = 25;
+        const ren = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        ren.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        containerEl.appendChild(ren.domElement);
+
+        const ctrl = new OrbitControls(cam, ren.domElement);
+        ctrl.enableDamping = true;
+        ctrl.dampingFactor = 0.05;
+        ctrl.autoRotate = true;
+        ctrl.autoRotateSpeed = 0.4;
+
+        // Fibonacci sphere
+        const positions = new Float32Array(CMP_N * 3);
+        const colors = new Float32Array(CMP_N * 3);
+        const sizes = new Float32Array(CMP_N);
+        const R = 10;
+        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+        for (let i = 0; i < CMP_N; i++) {
+            const y = 1 - (i / (CMP_N - 1)) * 2;
+            const radius = Math.sqrt(1 - y * y);
+            const theta = goldenAngle * i;
+            positions[i * 3] = Math.cos(theta) * radius * R;
+            positions[i * 3 + 1] = y * R;
+            positions[i * 3 + 2] = Math.sin(theta) * radius * R;
+            colors[i * 3] = 0.05; colors[i * 3 + 1] = 0.07; colors[i * 3 + 2] = 0.09;
+            sizes[i] = 0.11;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+        const mat = new THREE.PointsMaterial({
+            size: 0.18, vertexColors: true, transparent: true,
+            opacity: 0.92, sizeAttenuation: true, depthWrite: false, blending: THREE.AdditiveBlending
+        });
+        const pts = new THREE.Points(geo, mat);
+        scene.add(pts);
+
+        // resize
+        const ro = new ResizeObserver(() => {
+            const w = containerEl.clientWidth, h = containerEl.clientHeight;
+            if (!w || !h) return;
+            ren.setSize(w, h);
+            cam.aspect = w / h;
+            cam.updateProjectionMatrix();
+        });
+        ro.observe(containerEl);
+
+        return { scene, camera: cam, renderer: ren, controls: ctrl, geometry: geo, points: pts };
+    }
+
+    let cmpLeft = null, cmpRight = null;
+    let cmpAnimId = null;
+    let cmpModalOpen = false;
+
+    function initCmpGlobes() {
+        if (cmpLeft) return; // already initialized
+        const leftEl = document.getElementById('cmp-canvas-left');
+        const rightEl = document.getElementById('cmp-canvas-right');
+        if (!leftEl || !rightEl) return;
+        cmpLeft = createCmpGlobe(leftEl);
+        cmpRight = createCmpGlobe(rightEl);
+        cmpRight.controls.autoRotateSpeed = -0.3;
+    }
+
+    function cmpAnimate() {
+        if (!cmpModalOpen) { cmpAnimId = null; return; }
+        cmpAnimId = requestAnimationFrame(cmpAnimate);
+
+        // Update BDH globe (sparse)
+        const colL = cmpLeft.geometry.attributes.color;
+        const szL = cmpLeft.geometry.attributes.size;
+        for (let i = 0; i < CMP_N; i++) {
+            cmpBdhAct[i] += (cmpBdhTarget[i] - cmpBdhAct[i]) * 0.15;
+            const c = colorFromStops(cmpBdhAct[i], BLUE_STOPS);
+            colL.array[i * 3] = c.r; colL.array[i * 3 + 1] = c.g; colL.array[i * 3 + 2] = c.b;
+            szL.array[i] = 0.11 + Math.min(0.28, cmpBdhAct[i] * 0.35);
+        }
+        colL.needsUpdate = true; szL.needsUpdate = true;
+
+        // Update Transformer globe (dense — force all firing neurons to 1.0)
+        const colR = cmpRight.geometry.attributes.color;
+        const szR = cmpRight.geometry.attributes.size;
+        for (let i = 0; i < CMP_N; i++) {
+            cmpTfAct[i] += (cmpTfTarget[i] - cmpTfAct[i]) * 0.15;
+            const visVal = cmpTfTarget[i] > 0.05 ? 1.0 : cmpTfAct[i];
+            const c = colorFromStops(visVal, RED_STOPS);
+            colR.array[i * 3] = c.r; colR.array[i * 3 + 1] = c.g; colR.array[i * 3 + 2] = c.b;
+            szR.array[i] = 0.11 + Math.min(0.28, visVal * 0.35);
+        }
+        colR.needsUpdate = true; szR.needsUpdate = true;
+
+        cmpLeft.controls.update();
+        cmpRight.controls.update();
+        cmpLeft.renderer.render(cmpLeft.scene, cmpLeft.camera);
+        cmpRight.renderer.render(cmpRight.scene, cmpRight.camera);
+    }
+
+    // Open / Close
+    openBtn.addEventListener('click', () => {
+        modal.classList.remove('hidden');
+        cmpModalOpen = true;
+        initCmpGlobes();
+        if (!cmpAnimId) cmpAnimate();
+    });
+
+    closeBtn.addEventListener('click', () => {
+        modal.classList.add('hidden');
+        cmpModalOpen = false;
+    });
+
+    // Hash-expand small arrays to CMP_N
+    function hashExpand(arr, targetLen) {
+        if (arr.length === targetLen) {
+            const out = new Float32Array(targetLen);
+            for (let i = 0; i < targetLen; i++) out[i] = Math.max(0, Math.min(1, arr[i] || 0));
+            return out;
+        }
+        const out = new Float32Array(targetLen);
+        for (let i = 0; i < arr.length; i++) {
+            const idx = ((i * 2654435761) >>> 0) % targetLen;
+            out[idx] += Number(arr[i]) || 0;
+        }
+        for (let i = 0; i < targetLen; i++) out[i] = Math.max(0, Math.min(1, out[i]));
+        return out;
+    }
+
+    // Comparison WebSocket messages — hook into existing socket
+    function handleCmpMessage(data) {
+        if (!cmpModalOpen) return;
+
+        if (data.type === 'token' && data.model === 'transformer') {
+            // Dense firing: set ALL neurons to 1.0
+            for (let i = 0; i < CMP_N; i++) cmpTfTarget[i] = 1.0;
+            // Accumulate output text
+            if (data.character) {
+                cmpTfText += data.character;
+                const el = document.getElementById('cmp-tf-output');
+                if (el) { el.textContent = cmpTfText; el.scrollTop = el.scrollHeight; }
+            }
+        }
+        if (data.type === 'token' && data.model === 'bdh') {
+            const vis = data.xy_vis || [];
+            const expanded = hashExpand(vis, CMP_N);
+            for (let i = 0; i < CMP_N; i++) cmpBdhTarget[i] = expanded[i];
+            // Accumulate output text
+            if (data.character) {
+                cmpBdhText += data.character;
+                const el = document.getElementById('cmp-bdh-output');
+                if (el) { el.textContent = cmpBdhText; el.scrollTop = el.scrollHeight; }
+            }
+        }
+
+        // Memory info
+        if (data.type === 'token' && data.mem_info) {
+            updateCmpMemory(data.mem_info);
+        }
+
+        // Logs
+        if (data.type === 'log') {
+            const logsEl = document.getElementById('cmp-logs-container');
+            if (logsEl) {
+                const line = document.createElement('div');
+                line.textContent = `[${data.model || '?'}] ${data.text}`;
+                logsEl.appendChild(line);
+                logsEl.scrollTop = logsEl.scrollHeight;
+            }
+        }
+    }
+
+    function formatCmpBytes(bytes) {
+        if (bytes < 1024) return Math.round(bytes) + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    }
+
+    function updateCmpMemory(info) {
+        if (info.model === 'transformer') {
+            const el1 = document.getElementById('cmp-tf-tokens');
+            const el2 = document.getElementById('cmp-tf-bytes');
+            if (el1) el1.textContent = info.seq_len;
+            if (el2) el2.textContent = formatCmpBytes(info.bytes);
+        } else if (info.model === 'bdh') {
+            const el1 = document.getElementById('cmp-bdh-tokens');
+            const el2 = document.getElementById('cmp-bdh-bytes');
+            if (el1) el1.textContent = info.seq_len;
+            if (el2) el2.textContent = formatCmpBytes(info.bytes);
+        }
+    }
+
+    // Track generated text for display in memory tab
+    let cmpTfText = '';
+    let cmpBdhText = '';
+
+    // Send comparison prompt
+    function sendComparison() {
+        const text = cmpInput.value.trim();
+        if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
+
+        // Clear previous state
+        cmpBdhTarget.fill(0); cmpBdhAct.fill(0);
+        cmpTfTarget.fill(0); cmpTfAct.fill(0);
+        cmpTfText = ''; cmpBdhText = '';
+        const logsEl = document.getElementById('cmp-logs-container');
+        if (logsEl) logsEl.innerHTML = '';
+        const tfOut = document.getElementById('cmp-tf-output');
+        if (tfOut) tfOut.textContent = '';
+        const bdhOut = document.getElementById('cmp-bdh-output');
+        if (bdhOut) bdhOut.textContent = '';
+
+        socket.send(JSON.stringify({
+            type: 'prompt',
+            text: text,
+            model_type: 'both'
+        }));
+        cmpInput.value = '';
+    }
+
+    cmpSendBtn.addEventListener('click', sendComparison);
+    cmpInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendComparison();
+    });
+
+    // Expose handler so the main WebSocket onmessage can call it
+    window._handleCmpMessage = handleCmpMessage;
+})();

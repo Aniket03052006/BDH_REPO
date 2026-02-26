@@ -232,6 +232,7 @@ class BDH(nn.Module):
         
         # Diagnostics: Weight norms before
         norm_enc_before = self.encoder.norm().item()
+        norm_enc_v_before = self.encoder_v.norm().item()
         norm_dec_before = self.decoder.norm().item()
         
         # Encoder Reinforcement
@@ -256,6 +257,7 @@ class BDH(nn.Module):
         
         # Diagnostics: Weight norms after
         norm_enc_after = self.encoder.norm().item()
+        norm_enc_v_after = self.encoder_v.norm().item()
         norm_dec_after = self.decoder.norm().item()
         
         result = {
@@ -265,6 +267,7 @@ class BDH(nn.Module):
             "active_fraction": mask.float().mean().item(),
             "weight_norm_change": {
                 "encoder": norm_enc_after - norm_enc_before,
+                "encoder_v": norm_enc_v_after - norm_enc_v_before,
                 "decoder": norm_dec_after - norm_dec_before
             },
             "accumulated_tokens": self.stats_count

@@ -36,6 +36,9 @@
                     <h2>Neural Explorer</h2>
                 </div>
                 <div class="controls-top">
+                    <button id="compare-btn" title="Compare BDH vs Transformer"
+                        style="width:auto;padding:0 10px;font-size:0.72rem;font-weight:700;letter-spacing:0.2px;border-radius:9px;">⚡
+                        Compare</button>
                     <button id="reset-btn" title="Reset Session">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -355,6 +358,81 @@
     </div>
 
     <script type="module" src="main.js"></script>
+
+    <!-- ══════ COMPARISON MODAL ══════ -->
+    <div id="comparison-modal" class="cmp-modal hidden">
+        <div class="cmp-modal-header">
+            <h2 class="cmp-title">⚡ BDH vs Transformer Comparison</h2>
+            <div class="cmp-tabs">
+                <button class="cmp-tab active" data-cmp-tab="cmp-tab-globe">Globe</button>
+                <button class="cmp-tab" data-cmp-tab="cmp-tab-memory">Memory</button>
+            </div>
+            <button id="cmp-close-btn" class="cmp-close" title="Close">✕</button>
+        </div>
+
+        <!-- Globe Tab -->
+        <div id="cmp-tab-globe" class="cmp-tab-content active">
+            <div class="cmp-globes">
+                <div class="cmp-globe-half">
+                    <span class="cmp-globe-label cmp-blue">● BDH (Sparse)</span>
+                    <div id="cmp-canvas-left" class="cmp-canvas"></div>
+                </div>
+                <div class="cmp-divider"></div>
+                <div class="cmp-globe-half">
+                    <span class="cmp-globe-label cmp-red">● Transformer (Dense)</span>
+                    <div id="cmp-canvas-right" class="cmp-canvas"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Memory Tab -->
+        <div id="cmp-tab-memory" class="cmp-tab-content">
+            <div class="cmp-mem-split">
+                <div class="cmp-mem-card">
+                    <div class="cmp-mem-head cmp-red-bg">
+                        <span class="cmp-mem-title">Transformer KV Cache</span>
+                        <span class="cmp-mem-complexity">O(T)</span>
+                    </div>
+                    <div class="cmp-mem-metrics">
+                        <div class="cmp-metric"><span class="cmp-metric-label">Tokens (T)</span><span
+                                class="cmp-metric-val" id="cmp-tf-tokens">0</span></div>
+                        <div class="cmp-metric"><span class="cmp-metric-label">Memory</span><span
+                                class="cmp-metric-val cmp-red" id="cmp-tf-bytes">0 B</span></div>
+                    </div>
+                    <div class="cmp-output-section">
+                        <h5 class="cmp-output-title">Generated Output</h5>
+                        <div class="cmp-output-text" id="cmp-tf-output"></div>
+                    </div>
+                </div>
+                <div class="cmp-mem-card">
+                    <div class="cmp-mem-head cmp-blue-bg">
+                        <span class="cmp-mem-title">BDH Memory Space</span>
+                        <span class="cmp-mem-complexity">O(1)</span>
+                    </div>
+                    <div class="cmp-mem-metrics">
+                        <div class="cmp-metric"><span class="cmp-metric-label">Tokens (T)</span><span
+                                class="cmp-metric-val" id="cmp-bdh-tokens">0</span></div>
+                        <div class="cmp-metric"><span class="cmp-metric-label">Memory</span><span
+                                class="cmp-metric-val cmp-cyan" id="cmp-bdh-bytes">0 B</span></div>
+                    </div>
+                    <div class="cmp-output-section">
+                        <h5 class="cmp-output-title">Generated Output</h5>
+                        <div class="cmp-output-text" id="cmp-bdh-output"></div>
+                    </div>
+                </div>
+                <div class="cmp-logs-col">
+                    <h4 class="cmp-logs-title">Live Logs</h4>
+                    <div id="cmp-logs-container" class="cmp-logs-scroll"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Bar -->
+        <div class="cmp-input-bar">
+            <input type="text" id="cmp-input" placeholder="Enter a prompt to compare..." autocomplete="off">
+            <button id="cmp-send-btn">Compare</button>
+        </div>
+    </div>
 </body>
 
 </html>

@@ -52,25 +52,3 @@ if __name__ == "__main__":
 
 ### 2. WebSocket URL in `main.js`
 In `main.js`, ensure the `WS_URL` correctly points to the hosting domain (usually `wss://` for production).
-
----
-
-## Option 4: Split Deployment (Vercel Frontend + Render Backend)
-This is a standard setup, separating static assets from the compute-heavy model.
-
-### 1. Backend (Render)
-1. Deploy the `BDH_Explorer` repo to Render as a **Web Service** (using Docker).
-2. Note your Render URL (e.g., `https://bdh-backend.onrender.com`).
-
-### 2. Frontend (Vercel)
-1. Open `main.js` and find the `BACKEND_HOST` variable.
-2. Change it from `null` to your Render domain (without `https://`):
-   ```javascript
-   const BACKEND_HOST = 'bdh-backend.onrender.com';
-   ```
-3. Commit and push this change.
-4. On [Vercel](https://vercel.com/), click **Add New > Project**.
-5. Connect your GitHub repo.
-6. Vercel will host it as a static site. Your dashboard will be live at `https://your-app.vercel.app`.
-
-**Note**: `server.py` already includes CORS support to allow the Vercel domain.

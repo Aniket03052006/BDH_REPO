@@ -1,6 +1,40 @@
+# Python
 __pycache__/
-*.pyc
-*.log
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# PyTorch checkpoints (large files — track with Git LFS or exclude)
+# Uncomment below if you do NOT want to track checkpoints:
+# *.pt
+# *.pth
+
+# Training data
+input.txt
+dataset.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
-*.zip
-.qoder
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

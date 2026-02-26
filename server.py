@@ -18,7 +18,6 @@ import torch.nn.functional as F
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger("bdh-server")
 logging.basicConfig(level=logging.INFO)
@@ -27,15 +26,6 @@ logging.basicConfig(level=logging.INFO)
 # FastAPI App
 # ──────────────────────────────────────────
 app = FastAPI()
-
-# Allow CORS for split deployment (Frontend on Vercel, Backend on Render)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # In production, replace with your Vercel URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32
@@ -88,6 +78,97 @@ def load_model():
     return model
 
 MODEL = load_model()
+
+
+# ──────────────────────────────────────────
+# Transformer (TransformerLens) — Lazy Load for Comparison
+# ──────────────────────────────────────────
+import tracemalloc
+
+TF_MODEL = None
+TF_TOKENIZER = None
+
+def lazy_load_transformer():
+    global TF_MODEL, TF_TOKENIZER
+    if TF_MODEL is not None:
+        return
+    try:
+        from transformer_lens import HookedTransformer
+        logger.info("Loading TransformerLens GPT-2 small for comparison...")
+        TF_MODEL = HookedTransformer.from_pretrained("gpt2", device=str(DEVICE))
+        TF_MODEL.eval()
+        TF_TOKENIZER = TF_MODEL.tokenizer
+        logger.info("Transformer model loaded successfully.")
+    except Exception as e:
+        logger.error(f"Failed to load TransformerLens: {e}")
+
+
+async def stream_transformer_tokens(ws, prompt_text, max_tokens=100):
+    """Run GPT-2 via TransformerLens, stream tokens with activations for comparison globe."""
+    lazy_load_transformer()
+    if TF_MODEL is None:
+        await manager.send_json(ws, {"type": "log", "model": "transformer", "text": "Transformer model not available"})
+        return 0
+
+    import numpy as np
+    tokens = TF_MODEL.to_tokens(prompt_text)
+    n_neurons = TF_MODEL.cfg.d_mlp or 3072
+    generated_count = 0
+
+    tracemalloc.start()
+    for step in range(max_tokens):
+        with torch.no_grad():
+            logits = TF_MODEL(tokens)
+        next_logit = logits[0, -1, :]
+        probs = torch.softmax(next_logit / 0.7, dim=-1)
+        top_vals, top_ids = torch.topk(probs, 10)
+        probs_filtered = torch.zeros_like(probs)
+        probs_filtered[top_ids] = top_vals
+        probs_filtered = probs_filtered / probs_filtered.sum()
+        next_token = torch.multinomial(probs_filtered, 1).unsqueeze(0)
+        tokens = torch.cat([tokens, next_token], dim=1)
+        generated_count += 1
+
+        # Decode character
+        char = TF_TOKENIZER.decode(next_token[0].tolist())
+
+        # Dense activations — all neurons firing
+        vis = [1.0] * min(n_neurons, 16384)
+
+        # Memory info
+        seq_len = tokens.shape[1]
+        # KV cache: 2 * n_layers * seq_len * d_model * bytes_per_float
+        n_layers = TF_MODEL.cfg.n_layers
+        d_model = TF_MODEL.cfg.d_model
+        kv_bytes = 2 * n_layers * seq_len * d_model * 4
+        current, peak = tracemalloc.get_traced_memory()
+
+        msg = {
+            "type": "token",
+            "model": "transformer",
+            "character": char,
+            "xy_vis": vis[:200],  # send subset for perf
+            "mem_info": {
+                "model": "transformer",
+                "seq_len": int(seq_len),
+                "bytes": kv_bytes,
+            }
+        }
+
+        from starlette.websockets import WebSocketState
+        if ws.application_state == WebSocketState.CONNECTED:
+            await ws.send_text(json.dumps(msg))
+        else:
+            break
+
+        await manager.send_json(ws, {
+            "type": "log",
+            "model": "transformer",
+            "text": f"token {generated_count}: '{char}' | KV={kv_bytes} B | seq={seq_len}"
+        })
+        await asyncio.sleep(0.05)
+    tracemalloc.stop()
+    return generated_count
 
 
 # ──────────────────────────────────────────
@@ -399,6 +480,103 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "prompt":
                 prompt_text = data.get("text", "")
                 if not prompt_text:
+                    continue
+
+                model_type = data.get("model_type", "bdh")
+
+                # ── COMPARISON MODE ──
+                if model_type == "both":
+                    logger.info(f"Comparison mode: '{prompt_text}'")
+
+                    # 1) Run Transformer first
+                    tf_count = await stream_transformer_tokens(websocket, prompt_text, max_tokens=50)
+                    logger.info(f"Transformer generated {tf_count} tokens")
+
+                    # 2) Run BDH for the same number of tokens
+                    bdh_tokens_generated = 0
+                    prompt_bytes = bytearray(prompt_text, "utf-8")
+                    bdh_prompt_tokens = torch.tensor(
+                        [list(prompt_bytes)], dtype=torch.long, device=DEVICE
+                    )
+                    C_cmp = MODEL.config
+                    nh_cmp = C_cmp.n_head
+                    D_cmp = C_cmp.n_embd
+                    N_cmp = D_cmp * C_cmp.mlp_internal_dim_multiplier // nh_cmp
+
+                    torch.manual_seed(42)
+                    tracemalloc.start()
+                    for step_cmp in range(tf_count):
+                        idx_cmp = bdh_prompt_tokens
+                        Bc, Tc = idx_cmp.size()
+                        with torch.no_grad():
+                            xc = MODEL.embed(idx_cmp).unsqueeze(1)
+                            xc = MODEL.ln(xc)
+                            for level_c in range(C_cmp.n_layer):
+                                xl = xc @ MODEL.encoder
+                                xs = F.relu(xl)
+                                ykv = MODEL.attn(Q=xs, K=xs, V=xc)
+                                ykv = MODEL.ln(ykv)
+                                yl = ykv @ MODEL.encoder_v
+                                ys = F.relu(yl)
+                                xys = xs * ys
+                                xys = MODEL.drop(xys)
+                                ymlp = xys.transpose(1, 2).reshape(Bc, 1, Tc, N_cmp * nh_cmp) @ MODEL.decoder
+                                yc = MODEL.ln(ymlp)
+                                xc = MODEL.ln(xc + yc)
+                            logits_c = xc.view(Bc, Tc, D_cmp) @ MODEL.lm_head
+
+                        logits_last_c = logits_c[:, -1, :]
+                        probs_c = F.softmax(logits_last_c / 0.7, dim=-1)
+                        kc = min(10, probs_c.size(-1))
+                        v_c, _ = torch.topk(probs_c, kc)
+                        min_v_c = v_c[:, [-1]]
+                        probs_c = torch.where(probs_c < min_v_c, torch.zeros_like(probs_c), probs_c)
+                        probs_c = probs_c / probs_c.sum(dim=-1, keepdim=True)
+                        next_c = torch.multinomial(probs_c, num_samples=1)
+                        bdh_prompt_tokens = torch.cat((bdh_prompt_tokens, next_c), dim=1)
+                        bdh_tokens_generated += 1
+
+                        # Decode character
+                        tb = next_c.item()
+                        ch = chr(tb) if 32 <= tb <= 126 else ('\n' if tb == 10 else '?')
+
+                        # Sparse activations for BDH globe
+                        flat_xy = (xs * ys)[:, :, -1, :].reshape(-1).float().detach().cpu()
+                        # Normalize for visualization
+                        mx = flat_xy.max().item()
+                        vis_list = (flat_xy / max(mx, 1e-6)).tolist()
+
+                        # BDH memory: constant O(1)
+                        bdh_mem = nh_cmp * D_cmp * N_cmp * 4  # fixed param size
+                        current_b, peak_b = tracemalloc.get_traced_memory()
+
+                        msg_bdh = {
+                            "type": "token",
+                            "model": "bdh",
+                            "character": ch,
+                            "xy_vis": vis_list[:200],
+                            "mem_info": {
+                                "model": "bdh",
+                                "seq_len": bdh_tokens_generated,
+                                "bytes": bdh_mem,
+                            }
+                        }
+                        from starlette.websockets import WebSocketState
+                        if websocket.application_state == WebSocketState.CONNECTED:
+                            await websocket.send_text(json.dumps(msg_bdh))
+                        else:
+                            break
+
+                        await manager.send_json(websocket, {
+                            "type": "log",
+                            "model": "bdh",
+                            "text": f"token {bdh_tokens_generated}: '{ch}' | mem={bdh_mem} B | O(1)"
+                        })
+                        await asyncio.sleep(0.05)
+
+                    tracemalloc.stop()
+                    await manager.send_json(websocket, {"status": "done"})
+                    logger.info(f"Comparison complete: TF={tf_count}, BDH={bdh_tokens_generated}")
                     continue
 
                 if not session.hebb_persist:

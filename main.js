@@ -6,11 +6,22 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // ═══════════════════════════════════════════
 let NEURON_COUNT = 16384; // default, will be updated from server config
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-// Use the same host/port if local, or just host if on Render/HF
-// To override the backend for split deployment (e.g. Vercel + Render):
-// Change the string below to your Render URL: e.g., 'your-app.onrender.com'
-const BACKEND_HOST = 'bdh-repo.onrender.com';
-const host = BACKEND_HOST || (window.location.port ? `${window.location.hostname}:${window.location.port}` : window.location.host);
+// MULTI-SERVER LOAD BALANCING (Free Tier Hack)
+// List all your Render/Railway/HF URLs here
+const BACKEND_HOSTS = [
+    'bdh-repo-n9hl.onrender.com',
+    'bdh-repo-9ein.onrender.com',
+    'bdh-repo-yosc.onrender.com'
+];
+
+// Simple Round Robin: Pick a random one or stick to the first successful one
+function getBestHost() {
+    if (BACKEND_HOSTS.length === 0) return (window.location.port ? `${window.location.hostname}:${window.location.port}` : window.location.host);
+    // For now, pick a random one to distribute load
+    return BACKEND_HOSTS[Math.floor(Math.random() * BACKEND_HOSTS.length)];
+}
+
+const host = getBestHost();
 const WS_URL = `${protocol}//${host}/ws`;
 
 // Monosemantic color gradient: black → blue → cyan → yellow → white

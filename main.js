@@ -9,6 +9,7 @@ const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 // MULTI-SERVER LOAD BALANCING (Free Tier Hack)
 // List all your Render/Railway/HF URLs here
 const BACKEND_HOSTS = [
+    'bdh-repo.onrender.com',
     'bdh-repo-n9hl.onrender.com',
     'bdh-repo-9ein.onrender.com',
     'bdh-repo-yosc.onrender.com'

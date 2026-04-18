@@ -411,7 +411,7 @@ When you click "Consolidate Weights", the system:
 
 Key environment variables and settings:
 
-| Setting | Default | Location |
+| Settings | Default | Location |
 |---------|---------|----------|
 | Server port | `8003` | `server.py` bottom |
 | Device | Auto (CUDA/CPU) | `server.py:30` |
